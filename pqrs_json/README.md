@@ -13,20 +13,17 @@ Archivo JSON con arreglo de objetos clasificados o un objeto unico, por ejemplo:
 - `username`
 - `nombre`
 - `secretaria`
-- `division` (opcional)
-- `tipo` (opcional)
+- `clasificacion`
+- `fecha_limite`
 
 Tambien soporta payload del bot con `usuario.username` y `usuario.nombre`.
 
 ## Salida
 
-Genera un archivo JSON con los campos originales y adicionales:
+Genera un archivo JSON conservando los campos de entrada y agregando solo:
 
-- `dependencia_sugerida`
 - `titulo_ia`
-- `resumen_bullets`
-- `borrador_respuesta`
-- `resumido_en_utc`
+- `resumen_ia`
 
 ## Ejecucion
 

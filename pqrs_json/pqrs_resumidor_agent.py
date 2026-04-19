@@ -10,11 +10,6 @@ from typing import Any
 
 SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 
-
-def now_utc_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
 def safe(value: Any, default: str = "no informado") -> str:
     if value is None:
         return default
@@ -35,10 +30,14 @@ def normalize_incoming_item(item: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
-def normalize_tipo(item: dict[str, Any]) -> str:
+def normalize_clasificacion(item: dict[str, Any]) -> str:
+    clasificacion = safe(item.get("clasificacion"), default="").strip()
+    if clasificacion:
+        return clasificacion.capitalize()
+
     tipo = safe(item.get("tipo"), default="").strip()
     if tipo:
-        return tipo
+        return tipo.capitalize()
 
     pqrs = safe(item.get("pqrs"), default="").lower()
     if "queja" in pqrs or "inconformidad" in pqrs:
@@ -48,12 +47,6 @@ def normalize_tipo(item: dict[str, Any]) -> str:
     if "reclamo" in pqrs:
         return "Reclamo"
     return "Informacion"
-
-
-def build_dependencia(item: dict[str, Any]) -> str:
-    secretaria = safe(item.get("secretaria"), default="Secretaria por definir")
-    division = safe(item.get("division"), default="Division por definir")
-    return f"{secretaria} - {division}"
 
 
 def clean_text(text: str) -> str:
@@ -73,77 +66,34 @@ def clip(text: str, max_len: int) -> str:
     return text[: max_len - 1].rstrip() + "..."
 
 
-def build_title(pqrs: str, tipo: str) -> str:
+def build_title(pqrs: str, clasificacion: str) -> str:
     sentences = split_sentences(pqrs)
     if not sentences:
-        return f"{tipo}: caso sin detalle textual"
-    return f"{tipo}: {clip(sentences[0], 95)}"
+        return f"{clasificacion}: caso sin detalle textual"
+    return f"{clasificacion}: {clip(sentences[0], 95)}"
 
 
-def build_bullets(pqrs: str, dependencia: str, canal: str) -> list[str]:
-    sentences = split_sentences(pqrs)
-    bullets = sentences[:2]
-
-    if not bullets:
-        bullets.append("No se recibio detalle narrativo de la PQRS en el texto de entrada.")
-    if len(bullets) == 1:
-        bullets.append("Se recomienda validar anexos, antecedentes y normativa aplicable antes de la respuesta final.")
-
-    bullets.append(f"Canal de recepcion: {safe(canal)}. Dependencia sugerida: {dependencia}.")
-    return bullets
-
-
-def format_nombre(nombre: str) -> str:
-    clean = clean_text(nombre)
-    if not clean:
-        return "ciudadano"
-    return clean.split(" ")[0]
-
-
-def infer_tema(pqrs: str, tipo: str) -> str:
+def build_summary(pqrs: str) -> str:
     sentences = split_sentences(pqrs)
     if not sentences:
-        return f"solicitud asociada a {tipo.lower()}"
-    return clip(sentences[0], 110)
-
-
-def build_borrador(item: dict[str, Any], tipo: str, dependencia: str) -> str:
-    nombre = format_nombre(safe(item.get("nombre"), default=""))
-    canal = safe(item.get("canal"))
-    fecha_utc = safe(item.get("fecha_utc"), default="sin fecha registrada")
-    tema = infer_tema(safe(item.get("pqrs"), default=""), tipo)
-
-    return (
-        f"Estimada {nombre},\n\n"
-        f"De acuerdo con su {tipo.lower()} recibida por el canal {canal} el {fecha_utc}, "
-        f"le informamos que su caso fue direccionado a {dependencia} para la revision tecnica correspondiente.\n\n"
-        f"Sobre el asunto reportado ({tema}), adelantaremos la validacion de antecedentes y requisitos "
-        "aplicables para entregarle una respuesta clara y completa dentro de los terminos legales de PQRSD.\n\n"
-        "Si requiere ampliar informacion, puede responder por este mismo canal indicando su numero de radicado.\n\n"
-        "Cordial saludo,\n"
-        "Equipo de Atencion PQRSD"
-    )
+        return "No se recibio contenido suficiente para generar un resumen."
+    return clip(" ".join(sentences[:3]), 420)
 
 
 def resumir_item(item: dict[str, Any]) -> dict[str, Any]:
     item = normalize_incoming_item(item)
     pqrs = safe(item.get("pqrs"), default="")
-    tipo = normalize_tipo(item)
-    dependencia = build_dependencia(item)
-    titulo_ia = build_title(pqrs, tipo)
+    clasificacion = normalize_clasificacion(item)
+    titulo_ia = build_title(pqrs, clasificacion)
 
     result = dict(item)
-    result["tipo"] = tipo
-    result["dependencia_sugerida"] = dependencia
     result["titulo_ia"] = titulo_ia
-    result["resumen_bullets"] = build_bullets(pqrs, dependencia, safe(item.get("canal")))
-    result["borrador_respuesta"] = build_borrador(item, tipo, dependencia)
-    result["resumido_en_utc"] = now_utc_iso()
+    result["resumen_ia"] = build_summary(pqrs)
     return result
 
 
 def load_json_array(path: Path) -> list[dict[str, Any]]:
-    with path.open("r", encoding="utf-8") as f:
+    with path.open("r", encoding="utf-8-sig") as f:
         data = json.load(f)
 
     if isinstance(data, dict):
