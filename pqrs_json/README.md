@@ -4,7 +4,7 @@ Este modulo agrega el agente resumidor en la misma estructura de `pqrs_json`.
 
 ## Entrada esperada
 
-Archivo JSON con arreglo de objetos clasificados, por ejemplo:
+Archivo JSON con arreglo de objetos clasificados o un objeto unico, por ejemplo:
 
 - `radicado`
 - `pqrs`
@@ -15,6 +15,8 @@ Archivo JSON con arreglo de objetos clasificados, por ejemplo:
 - `secretaria`
 - `division` (opcional)
 - `tipo` (opcional)
+
+Tambien soporta payload del bot con `usuario.username` y `usuario.nombre`.
 
 ## Salida
 

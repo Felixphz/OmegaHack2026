@@ -22,6 +22,19 @@ def safe(value: Any, default: str = "no informado") -> str:
     return text if text else default
 
 
+def normalize_incoming_item(item: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(item)
+    usuario = item.get("usuario")
+
+    if isinstance(usuario, dict):
+        if not normalized.get("username") and usuario.get("username"):
+            normalized["username"] = usuario.get("username")
+        if not normalized.get("nombre") and usuario.get("nombre"):
+            normalized["nombre"] = usuario.get("nombre")
+
+    return normalized
+
+
 def normalize_tipo(item: dict[str, Any]) -> str:
     tipo = safe(item.get("tipo"), default="").strip()
     if tipo:
@@ -113,6 +126,7 @@ def build_borrador(item: dict[str, Any], tipo: str, dependencia: str) -> str:
 
 
 def resumir_item(item: dict[str, Any]) -> dict[str, Any]:
+    item = normalize_incoming_item(item)
     pqrs = safe(item.get("pqrs"), default="")
     tipo = normalize_tipo(item)
     dependencia = build_dependencia(item)
@@ -132,14 +146,17 @@ def load_json_array(path: Path) -> list[dict[str, Any]]:
     with path.open("r", encoding="utf-8") as f:
         data = json.load(f)
 
+    if isinstance(data, dict):
+        return [normalize_incoming_item(data)]
+
     if not isinstance(data, list):
-        raise ValueError("El archivo de entrada debe contener un arreglo JSON.")
+        raise ValueError("El archivo de entrada debe contener un arreglo JSON o un objeto JSON.")
 
     normalized: list[dict[str, Any]] = []
     for idx, item in enumerate(data):
         if not isinstance(item, dict):
             raise ValueError(f"Elemento en posicion {idx} no es un objeto JSON.")
-        normalized.append(item)
+        normalized.append(normalize_incoming_item(item))
     return normalized
 
 
