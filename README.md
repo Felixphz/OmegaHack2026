@@ -100,9 +100,145 @@ app/
 
 - **Frontend (Agorapp):** https://github.com/sammirBolanos/agorapp  
   Interfaz web de la plataforma donde los usuarios interactúan con el sistema.
+
 - **Backend de notificaciones:** https://github.com/sammirBolanos/notificationAgorapp  
   Servicio encargado de enviar notificaciones asociadas al flujo de PQRSD.
+Agorapp API
 
+Backend desarrollado con Spring Boot para gestionar y consultar PQRS procesadas, incluyendo asignación de secretarías y resolución de casos.
+
+## Objetivo del servicio
+
+Este servicio expone una API REST para:
+
+1. Consultar el listado de PQRS.
+2. Consultar una PQRS por radicado.
+3. Filtrar PQRS por secretaría (con normalización de texto).
+4. Marcar una PQRS como resuelta.
+5. Actualizar la secretaría asociada a una PQRS.
+6. Listar secretarías de alcaldía.
+
+Está pensado como una pieza de una arquitectura de microservicios, enfocada en la gestión de notificaciones y clasificación de PQRS.
+
+## Stack tecnológico
+
+1. Java 21
+2. Spring Boot 3
+3. Spring Web
+4. Spring Data JPA
+5. PostgreSQL
+6. Maven
+7. Docker y Docker Compose (para ejecución containerizada)
+
+## Variables de entorno
+
+Configura estas variables antes de ejecutar:
+
+1. DB_URL
+2. DB_USERNAME
+3. DB_PASSWORD
+4. CORS_ALLOWED_ORIGINS (opcional, por defecto *)
+
+El puerto se resuelve con esta prioridad:
+
+1. PORT
+2. SERVER_PORT
+3. 8082 (valor por defecto)
+
+## Endpoints principales
+
+### QPR / PQRS
+
+1. GET /qprs
+   Lista todas las PQRS.
+
+2. GET /qprs/{id}
+   Consulta una PQRS por radicado.
+
+3. GET /qprs/por-secretaria?secretaria=Nombre Secretaria
+   Filtra PQRS por nombre de secretaría (insensible a tildes y espacios).
+
+4. PATCH /qprs/{id}/resolver
+   Marca como resuelta una PQRS.
+
+5. PATCH /qprs/{id}/secretaria
+   Actualiza solo la secretaría de un radicado.
+
+   Body JSON:
+   {
+     "secretaria": "Secretaría de Gobierno"
+   }
+
+6. PATCH /qprs/secretaria
+   Actualiza secretaría enviando radicado y secretaría.
+
+   Body JSON:
+   {
+     "radicado": "RAD-123",
+     "secretaria": "Secretaría de Hacienda"
+   }
+
+7. PATCH /qprs/actualizar-secretaria
+   Alias del endpoint anterior con el mismo body JSON.
+
+### Secretarías
+
+1. GET /secretarias
+   Lista las secretarías de alcaldía disponibles.
+
+## Cómo correr el proyecto (local)
+
+## Opción 1: Maven
+
+Requisitos:
+
+1. Java 21
+2. Maven 3.9+
+3. Base de datos PostgreSQL accesible
+
+En PowerShell:
+
+    $env:DB_URL="jdbc:postgresql://TU_HOST/TU_DB?sslmode=require"
+    $env:DB_USERNAME="TU_USUARIO"
+    $env:DB_PASSWORD="TU_PASSWORD"
+    $env:CORS_ALLOWED_ORIGINS="*"
+    mvn spring-boot:run
+
+La API quedará disponible en:
+
+    http://localhost:8082
+
+## Opción 2: Docker Compose
+
+Define primero las variables en tu entorno o en un archivo .env y luego ejecuta:
+
+    docker compose up --build
+
+La API quedará disponible en:
+
+    http://localhost:8082
+
+## Estructura de datos esperada
+
+El servicio trabaja principalmente con la tabla pqrs_procesada (radicado como identificador) y con la tabla secretarias_alcaldia.
+
+## Pruebas
+
+Para ejecutar pruebas:
+
+    mvn test
+
+## Nota de arquitectura y despliegue
+
+Este backend forma parte de una arquitectura de microservicios.  
+Por esa razón, el despliegue y la orquestación de ambientes se gestionan en otro repositorio, separado de este código fuente.
+
+En este repositorio se mantiene principalmente:
+
+1. Lógica del microservicio.
+2. Exposición de endpoints.
+3. Integración con base de datos.
+4. Configuración para ejecución local.
 ---
 
 ## Cómo ponerlo a funcionar (rápido)
