@@ -96,6 +96,15 @@ app/
 
 ---
 
+## Repositorios relacionados
+
+- **Frontend (Agorapp):** https://github.com/sammirBolanos/agorapp  
+  Interfaz web de la plataforma donde los usuarios interactúan con el sistema.
+- **Backend de notificaciones:** https://github.com/sammirBolanos/notificationAgorapp  
+  Servicio encargado de enviar notificaciones asociadas al flujo de PQRSD.
+
+---
+
 ## Cómo ponerlo a funcionar (rápido)
 
 ### 1) Instalar dependencias
