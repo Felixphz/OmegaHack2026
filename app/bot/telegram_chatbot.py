@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_ollama import ChatOllama
-from postgres_pqrs_store import save_pqrs_to_postgres
+from app.storage.postgres_pqrs_store import save_pqrs_to_postgres
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
