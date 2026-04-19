@@ -28,21 +28,43 @@ async def _get_pool() -> asyncpg.Pool:
 async def save_pqrs_to_postgres(pqrs_json: dict[str, Any]) -> None:
     pool = await _get_pool()
     async with pool.acquire() as conn:
-        await conn.execute(
-            """
-            INSERT INTO pqrs (radicado, pqrs, canal, fecha_utc, username, nombre)
-            VALUES ($1, $2, $3, $4, $5, $6)
-            ON CONFLICT (radicado) DO UPDATE
-            SET pqrs = EXCLUDED.pqrs,
-                canal = EXCLUDED.canal,
-                fecha_utc = EXCLUDED.fecha_utc,
-                username = EXCLUDED.username,
-                nombre = EXCLUDED.nombre
-            """,
-            pqrs_json["radicado"],
-            pqrs_json["pqrs"],
-            pqrs_json["canal"],
-            datetime.fromisoformat(pqrs_json["fecha_utc"]),
-            pqrs_json.get("username"),
-            pqrs_json.get("nombre"),
-        )
+        try:
+            await conn.execute(
+                """
+                INSERT INTO pqrs (radicado, pqrs, borrador_respuesta, canal, fecha_utc, username, nombre)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                ON CONFLICT (radicado) DO UPDATE
+                SET pqrs = EXCLUDED.pqrs,
+                    borrador_respuesta = EXCLUDED.borrador_respuesta,
+                    canal = EXCLUDED.canal,
+                    fecha_utc = EXCLUDED.fecha_utc,
+                    username = EXCLUDED.username,
+                    nombre = EXCLUDED.nombre
+                """,
+                pqrs_json["radicado"],
+                pqrs_json["pqrs"],
+                pqrs_json.get("borrador_respuesta"),
+                pqrs_json["canal"],
+                datetime.fromisoformat(pqrs_json["fecha_utc"]),
+                pqrs_json.get("username"),
+                pqrs_json.get("nombre"),
+            )
+        except asyncpg.exceptions.UndefinedColumnError:
+            await conn.execute(
+                """
+                INSERT INTO pqrs (radicado, pqrs, canal, fecha_utc, username, nombre)
+                VALUES ($1, $2, $3, $4, $5, $6)
+                ON CONFLICT (radicado) DO UPDATE
+                SET pqrs = EXCLUDED.pqrs,
+                    canal = EXCLUDED.canal,
+                    fecha_utc = EXCLUDED.fecha_utc,
+                    username = EXCLUDED.username,
+                    nombre = EXCLUDED.nombre
+                """,
+                pqrs_json["radicado"],
+                pqrs_json["pqrs"],
+                pqrs_json["canal"],
+                datetime.fromisoformat(pqrs_json["fecha_utc"]),
+                pqrs_json.get("username"),
+                pqrs_json.get("nombre"),
+            )

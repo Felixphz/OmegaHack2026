@@ -97,6 +97,20 @@ CLASSIFIER_PROMPT = (
     "Mensaje del usuario: {texto}"
 )
 
+DRAFT_RESPONSE_PROMPT = (
+    "Eres un asistente de apoyo para funcionarios que revisan PQRSD en Colombia.\n\n"
+    "Tu tarea es redactar un borrador de respuesta institucional para una PQRS del ciudadano.\n"
+    "El borrador debe servir como guia para revision humana.\n\n"
+    "Reglas:\n"
+    "1. Escribe en espanol claro y formal.\n"
+    "2. Muestra empatia sin prometer soluciones que no dependan de la entidad.\n"
+    "3. Resume la solicitud del ciudadano en una frase.\n"
+    "4. Propone pasos de gestion razonables y cierre cordial.\n"
+    "5. No inventes normas, fechas, radicados ni compromisos especificos.\n"
+    "6. Entrega solo el texto del borrador, sin encabezados tecnicos ni markdown.\n\n"
+    "PQRS del ciudadano: {texto}"
+)
+
 
 def _is_greeting(text: str) -> bool:
     normalized = text.lower().strip()
@@ -150,11 +164,23 @@ def build_pqrs_json(update: Update, message_text: str) -> dict:
     return {
         "radicado": str(uuid.uuid4())[:8].upper(),
         "pqrs": message_text,
+        "borrador_respuesta": None,
         "canal": "telegram",
         "fecha_utc": datetime.now(timezone.utc).isoformat(),
         "username": user.username if user else None,
         "nombre": user.full_name if user else None,
     }
+
+
+async def generate_draft_response(text: str, llm: ChatOllama) -> str | None:
+    try:
+        prompt = ChatPromptTemplate.from_messages([("human", DRAFT_RESPONSE_PROMPT)])
+        chain = prompt | llm | StrOutputParser()
+        draft = (await chain.ainvoke({"texto": text})).strip()
+        return draft or None
+    except Exception as exc:
+        logger.warning("No fue posible generar borrador IA: %s", exc)
+        return None
 
 
 async def save_to_database(pqrs_json: dict) -> bool:
@@ -248,6 +274,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
              )
              return
         pqrs_json = build_pqrs_json(update, user_text)
+        draft_response = await generate_draft_response(user_text, llm)
+        if draft_response:
+            pqrs_json["borrador_respuesta"] = draft_response
         radicado = pqrs_json["radicado"]
         context.application.bot_data["last_pqrs"] = pqrs_json
         try:
