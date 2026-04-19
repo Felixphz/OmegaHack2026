@@ -22,14 +22,19 @@ Debes clasificar una PQRSD y determinar el plazo de respuesta segun normativa,
 usando estrictamente el contexto recuperado por RAG.
 Tambien debes identificar, bajo el marco legal y de trato digno en la atencion publica,
 si el lenguaje del ciudadano es grosero/ofensivo.
+Adicionalmente, debes proponer una respuesta sugerida para el ciudadano basada
+en el marco legal presente en el contexto RAG.
 
 Reglas:
 - Responde SOLO JSON valido.
-- Formato exacto: {{"clasificacion":"<categoria>", "dias_respuesta":<entero>, "tipo_dias":"habiles", "irrespetuosa":<true|false>}}
+- Formato exacto: {{"clasificacion":"<categoria>", "dias_respuesta":<entero>, "tipo_dias":"habiles", "irrespetuosa":<true|false>, "respuesta_sugerida":"<texto>"}}
 - "clasificacion" debe ser una categoria clara (peticion, queja, reclamo, sugerencia, felicitacion, consulta, denuncia u otra equivalente).
 - "dias_respuesta" debe ser entero positivo.
 - "tipo_dias" siempre "habiles".
 - "irrespetuosa" es true cuando hay insultos, agresiones verbales, humillaciones o amenazas directas.
+- "respuesta_sugerida" debe ser breve, clara y respetuosa (2-4 frases).
+- Usa SOLO informacion del contexto RAG. No inventes normas ni citas.
+- Si el contexto no aporta base legal concreta, responde de forma general sin mencionar leyes.
 - Si hay duda, usa clasificacion "peticion" y dias_respuesta 15.
 - Si no hay evidencia clara de groseria, usa irrespetuosa=false.
 
@@ -184,7 +189,21 @@ def _parse_bool(value: Any, default: bool = False) -> bool:
     return default
 
 
-def _parse_classifier_output(raw: str, pqrs_text: str) -> tuple[str, int, bool]:
+def _parse_response_sugerida(value: Any) -> str:
+    if value is None:
+        return ""
+    text = str(value).strip()
+    return text
+
+
+def _default_respuesta_sugerida() -> str:
+    return (
+        "Hemos recibido tu solicitud y sera gestionada por la entidad competente "
+        "dentro de los plazos legales establecidos. Te mantendremos informado del avance."
+    )
+
+
+def _parse_classifier_output(raw: str, pqrs_text: str) -> tuple[str, int, bool, str]:
     clean = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
     parsed = json.loads(clean)
     clasificacion = (parsed.get("clasificacion") or "").strip().lower() or "peticion"
@@ -192,7 +211,10 @@ def _parse_classifier_output(raw: str, pqrs_text: str) -> tuple[str, int, bool]:
     if dias <= 0:
         dias = 15
     irrespetuosa = _parse_bool(parsed.get("irrespetuosa"), default=_looks_irrespectful(pqrs_text))
-    return clasificacion, dias, irrespetuosa
+    respuesta_sugerida = _parse_response_sugerida(parsed.get("respuesta_sugerida"))
+    if not respuesta_sugerida:
+        respuesta_sugerida = _default_respuesta_sugerida()
+    return clasificacion, dias, irrespetuosa, respuesta_sugerida
 
 
 def _parse_datetime_utc(value: str) -> datetime:
@@ -249,9 +271,16 @@ async def classify_json(input_path: Path, output_path: Path | None, top_k: int) 
                 {"pqrs_text": pqrs_text, "secretaria": secretaria, "rag_context": rag_context}
             )
             try:
-                clasificacion, dias_respuesta, irrespetuosa = _parse_classifier_output(raw, pqrs_text)
+                clasificacion, dias_respuesta, irrespetuosa, respuesta_sugerida = _parse_classifier_output(
+                    raw, pqrs_text
+                )
             except Exception:
-                clasificacion, dias_respuesta, irrespetuosa = "peticion", 15, _looks_irrespectful(pqrs_text)
+                clasificacion, dias_respuesta, irrespetuosa, respuesta_sugerida = (
+                    "peticion",
+                    15,
+                    _looks_irrespectful(pqrs_text),
+                    _default_respuesta_sugerida(),
+                )
 
             fecha_base = _parse_datetime_utc(fecha_utc)
             fecha_limite = _add_business_days(fecha_base, dias_respuesta).date().isoformat()
@@ -260,6 +289,7 @@ async def classify_json(input_path: Path, output_path: Path | None, top_k: int) 
             row["clasificacion"] = clasificacion
             row["fecha_limite"] = fecha_limite
             row["irrespetuosa"] = irrespetuosa
+            row["respuesta_sugerida"] = respuesta_sugerida
             row["resuelta"] = False
             enriched.append(row)
     finally:

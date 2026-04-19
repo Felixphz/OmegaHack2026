@@ -15,6 +15,7 @@ from app.agents.pqrs_classification_agent import (
     _build_classifier_chain,
     _build_llm as _build_classifier_llm,
     _compact_context,
+    _default_respuesta_sugerida,
     _embed_query,
     _parse_classifier_output,
     _parse_datetime_utc,
@@ -62,11 +63,13 @@ async def _ensure_processed_table(conn: asyncpg.Connection, table: str) -> None:
             resumen_ia TEXT,
             clasificacion VARCHAR(50),
             fecha_limite DATE,
+            respuesta_sugerida TEXT,
             irrespetuosa BOOLEAN,
             resuelta BOOLEAN DEFAULT false
         )
     """
     await conn.execute(query)
+    await conn.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS respuesta_sugerida TEXT")
 
 
 async def _fetch_pending_pqrs(
@@ -94,12 +97,12 @@ async def _insert_processed_row(
         INSERT INTO {table} (
             radicado, pqrs, canal, fecha_utc, username, nombre,
             secretaria, titulo_ia, resumen_ia, clasificacion,
-            fecha_limite, irrespetuosa, resuelta
+            fecha_limite, respuesta_sugerida, irrespetuosa, resuelta
         )
         VALUES (
             $1, $2, $3, $4, $5, $6,
             $7, $8, $9, $10,
-            $11, $12, $13
+            $11, $12, $13, $14
         )
         ON CONFLICT (radicado) DO NOTHING
     """
@@ -116,6 +119,7 @@ async def _insert_processed_row(
         row.get("resumen_ia"),
         row.get("clasificacion"),
         row.get("fecha_limite"),
+        row.get("respuesta_sugerida"),
         row.get("irrespetuosa"),
         row.get("resuelta", False),
     )
@@ -171,9 +175,16 @@ async def _process_single_pqrs(
         {"pqrs_text": pqrs_text, "secretaria": secretaria, "rag_context": rag_context}
     )
     try:
-        clasificacion, dias_respuesta, irrespetuosa = _parse_classifier_output(raw, pqrs_text)
+        clasificacion, dias_respuesta, irrespetuosa, respuesta_sugerida = _parse_classifier_output(
+            raw, pqrs_text
+        )
     except Exception:
-        clasificacion, dias_respuesta, irrespetuosa = "peticion", 15, False
+        clasificacion, dias_respuesta, irrespetuosa, respuesta_sugerida = (
+            "peticion",
+            15,
+            False,
+            _default_respuesta_sugerida(),
+        )
 
     fecha_base = _coerce_fecha_utc(source_row["fecha_utc"])
     fecha_limite = _add_business_days(fecha_base, dias_respuesta).date()
@@ -182,6 +193,7 @@ async def _process_single_pqrs(
     processed["clasificacion"] = clasificacion
     processed["fecha_limite"] = fecha_limite
     processed["irrespetuosa"] = irrespetuosa
+    processed["respuesta_sugerida"] = respuesta_sugerida
     processed["resuelta"] = False
     processed["fecha_utc"] = fecha_base
     return processed
