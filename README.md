@@ -164,3 +164,7 @@ Si quieres que todo sea realmente automático, debes tener **dos procesos vivos*
 2. Orquestador en `--watch`
 
 Si el bot está arriba pero el orquestador no, las PQRSD se guardan, pero no avanzan al ciclo multiagente.
+
+## Link del despliegue 
+
+https://agorappp2026.vercel.app/
