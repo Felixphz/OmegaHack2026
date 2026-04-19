@@ -116,11 +116,12 @@ def resumir_item(item: dict[str, Any]) -> dict[str, Any]:
     pqrs = safe(item.get("pqrs"), default="")
     tipo = normalize_tipo(item)
     dependencia = build_dependencia(item)
+    titulo_ia = build_title(pqrs, tipo)
 
     result = dict(item)
     result["tipo"] = tipo
     result["dependencia_sugerida"] = dependencia
-    result["titulo_ia"] = build_title(pqrs, tipo)
+    result["titulo_ia"] = titulo_ia
     result["resumen_bullets"] = build_bullets(pqrs, dependencia, safe(item.get("canal")))
     result["borrador_respuesta"] = build_borrador(item, tipo, dependencia)
     result["resumido_en_utc"] = now_utc_iso()
