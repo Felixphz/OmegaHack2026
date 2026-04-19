@@ -1,0 +1,14 @@
+services:
+  bot:
+    build: .
+    command: python -m app.bot.telegram_chatbot
+    env_file:
+      - .env
+    restart: unless-stopped
+
+  orchestrator:
+    build: .
+    command: python -m app.pipelines.pqrs_orchestrator --watch --batch-size 20 --poll-interval 15
+    env_file:
+      - .env
+    restart: unless-stopped
