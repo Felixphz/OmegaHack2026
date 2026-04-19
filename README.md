@@ -168,3 +168,7 @@ Si el bot está arriba pero el orquestador no, las PQRSD se guardan, pero no ava
 ## Link del despliegue 
 
 https://agorappp2026.vercel.app/
+
+##link del bot de telegram
+
+https://t.me/PQRSIAbot 
