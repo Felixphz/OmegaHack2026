@@ -1,4 +1,7 @@
-from dataclasses import dataclass
+from __future__ import annotations
+
+import asyncio
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import re
 
@@ -8,6 +11,14 @@ class PQRSDraft:
     text: str
     created_at: str
     updated_at: str
+    status: str = "idle"
+    irrespetuosa: bool = False
+    timeout_task: asyncio.Task | None = field(default=None, repr=False)
+
+    def cancel_timeout(self) -> None:
+        if self.timeout_task is not None and not self.timeout_task.done():
+            self.timeout_task.cancel()
+            self.timeout_task = None
 
 
 class PQRSMemoryStore:
@@ -51,30 +62,28 @@ class PQRSMemoryStore:
     def get(self, chat_id: int) -> PQRSDraft | None:
         return self._drafts.get(chat_id)
 
-    def set(self, chat_id: int, text: str) -> PQRSDraft:
+    def set(
+        self,
+        chat_id: int,
+        text: str,
+        status: str = "idle",
+        irrespetuosa: bool = False,
+        timeout_task: asyncio.Task | None = None,
+    ) -> PQRSDraft:
         clean = self._sanitize_fragment(text)
         if not clean:
             self.clear(chat_id)
             now = datetime.now(timezone.utc).isoformat()
             return PQRSDraft(text="", created_at=now, updated_at=now)
         now = datetime.now(timezone.utc).isoformat()
-        draft = PQRSDraft(text=clean, created_at=now, updated_at=now)
-        self._drafts[chat_id] = draft
-        return draft
-
-    def append(self, chat_id: int, text: str) -> PQRSDraft:
-        new_fragment = self._sanitize_fragment(text)
-        now = datetime.now(timezone.utc).isoformat()
-        draft = self._drafts.get(chat_id)
-        if draft is None:
-            draft = PQRSDraft(text=new_fragment, created_at=now, updated_at=now)
-        else:
-            if not new_fragment:
-                return draft
-            if new_fragment in draft.text:
-                return draft
-            merged = f"{draft.text}\n\n{new_fragment}".strip()
-            draft = PQRSDraft(text=merged, created_at=draft.created_at, updated_at=now)
+        draft = PQRSDraft(
+            text=clean,
+            created_at=now,
+            updated_at=now,
+            status=status,
+            irrespetuosa=irrespetuosa,
+            timeout_task=timeout_task,
+        )
         self._drafts[chat_id] = draft
         return draft
 
@@ -87,9 +96,18 @@ class PQRSMemoryStore:
             self.clear(chat_id)
             return None
         now = datetime.now(timezone.utc).isoformat()
-        updated = PQRSDraft(text=clean, created_at=draft.created_at, updated_at=now)
+        updated = PQRSDraft(
+            text=clean,
+            created_at=draft.created_at,
+            updated_at=now,
+            status=draft.status,
+            irrespetuosa=draft.irrespetuosa,
+            timeout_task=draft.timeout_task,
+        )
         self._drafts[chat_id] = updated
         return updated
 
     def clear(self, chat_id: int) -> None:
-        self._drafts.pop(chat_id, None)
+        draft = self._drafts.pop(chat_id, None)
+        if draft is not None:
+            draft.cancel_timeout()
