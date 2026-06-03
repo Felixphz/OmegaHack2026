@@ -14,11 +14,22 @@ class PQRSDraft:
     status: str = "idle"
     irrespetuosa: bool = False
     timeout_task: asyncio.Task | None = field(default=None, repr=False)
+    collected_details: dict[str, str] = field(default_factory=dict)
+    pending_questions: list[str] = field(default_factory=list)
+    pqrs_type: str = ""
 
     def cancel_timeout(self) -> None:
         if self.timeout_task is not None and not self.timeout_task.done():
             self.timeout_task.cancel()
             self.timeout_task = None
+
+    def get_full_text(self) -> str:
+        if not self.collected_details:
+            return self.text
+        lines = [self.text, "", "Detalles proporcionados:"]
+        for key, value in self.collected_details.items():
+            lines.append(f"- {key}: {value}")
+        return "\n".join(lines)
 
 
 class PQRSMemoryStore:
@@ -69,6 +80,9 @@ class PQRSMemoryStore:
         status: str = "idle",
         irrespetuosa: bool = False,
         timeout_task: asyncio.Task | None = None,
+        collected_details: dict[str, str] | None = None,
+        pending_questions: list[str] | None = None,
+        pqrs_type: str = "",
     ) -> PQRSDraft:
         clean = self._sanitize_fragment(text)
         if not clean:
@@ -83,6 +97,9 @@ class PQRSMemoryStore:
             status=status,
             irrespetuosa=irrespetuosa,
             timeout_task=timeout_task,
+            collected_details=collected_details or {},
+            pending_questions=pending_questions or [],
+            pqrs_type=pqrs_type,
         )
         self._drafts[chat_id] = draft
         return draft
@@ -103,6 +120,32 @@ class PQRSMemoryStore:
             status=draft.status,
             irrespetuosa=draft.irrespetuosa,
             timeout_task=draft.timeout_task,
+            collected_details=draft.collected_details,
+            pending_questions=draft.pending_questions,
+            pqrs_type=draft.pqrs_type,
+        )
+        self._drafts[chat_id] = updated
+        return updated
+
+    def reset_details(self, chat_id: int, text: str) -> PQRSDraft | None:
+        draft = self._drafts.get(chat_id)
+        if draft is None:
+            return None
+        clean = self._sanitize_fragment(text)
+        if not clean:
+            self.clear(chat_id)
+            return None
+        now = datetime.now(timezone.utc).isoformat()
+        updated = PQRSDraft(
+            text=clean,
+            created_at=draft.created_at,
+            updated_at=now,
+            status=draft.status,
+            irrespetuosa=draft.irrespetuosa,
+            timeout_task=draft.timeout_task,
+            collected_details={},
+            pending_questions=[],
+            pqrs_type=draft.pqrs_type,
         )
         self._drafts[chat_id] = updated
         return updated

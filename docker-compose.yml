@@ -4,6 +4,9 @@ services:
     command: python -m app.bot.telegram_chatbot
     env_file:
       - .env
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     restart: unless-stopped
 
   orchestrator:
@@ -11,4 +14,7 @@ services:
     command: python -m app.pipelines.pqrs_orchestrator --watch --batch-size 20 --poll-interval 15
     env_file:
       - .env
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     restart: unless-stopped

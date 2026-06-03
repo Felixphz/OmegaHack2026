@@ -239,26 +239,26 @@ async def run_orchestrator(
             inserted = 0
             for row in pending_rows:
                 radicado = row["radicado"]
-                    try:
-                        logger.info("Procesando radicado %s...", radicado)
-                        processed_row = await _process_single_pqrs(
-                            source_row=row,
-                            routing_chain=routing_chain,
-                            classifier_chain=classifier_chain,
-                            rag_conn=rag_conn,
-                            rag_table=rag_table,
-                            routing_top_k=routing_top_k,
-                            classification_top_k=classification_top_k,
-                        )
-                        logger.info("Datos procesados para %s. Intentando guardar en DB...", radicado)
-                        was_inserted = await _insert_processed_row(target_conn, processed_table, processed_row)
-                        if was_inserted:
-                            inserted += 1
-                            logger.info("Radicado %s procesado y guardado exitosamente.", radicado)
-                        else:
-                            logger.warning("Radicado %s no se insertó (posible duplicado en %s).", radicado, processed_table)
-                    except Exception as exc:
-                        logger.exception("Fallo crítico procesando radicado %s: %s", radicado, exc)
+                try:
+                    logger.info("Procesando radicado %s...", radicado)
+                    processed_row = await _process_single_pqrs(
+                        source_row=row,
+                        routing_chain=routing_chain,
+                        classifier_chain=classifier_chain,
+                        rag_conn=rag_conn,
+                        rag_table=rag_table,
+                        routing_top_k=routing_top_k,
+                        classification_top_k=classification_top_k,
+                    )
+                    logger.info("Datos procesados para %s. Intentando guardar en DB...", radicado)
+                    was_inserted = await _insert_processed_row(target_conn, processed_table, processed_row)
+                    if was_inserted:
+                        inserted += 1
+                        logger.info("Radicado %s procesado y guardado exitosamente.", radicado)
+                    else:
+                        logger.warning("Radicado %s no se insertó (posible duplicado en %s).", radicado, processed_table)
+                except Exception as exc:
+                    logger.exception("Fallo crítico procesando radicado %s: %s", radicado, exc)
 
             logger.info("Lote procesado. pendientes=%d insertados=%d", len(pending_rows), inserted)
 
