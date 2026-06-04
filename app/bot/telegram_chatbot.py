@@ -1,14 +1,14 @@
 import asyncio
+import base64
 import json
 import logging
 import os
+import re
 import uuid
 from datetime import datetime, timezone
 
+import httpx
 from dotenv import load_dotenv
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_ollama import ChatOllama
 from app.storage.postgres_pqrs_store import save_pqrs_to_postgres
 from app.bot.pqrs_memory import PQRSMemoryStore
 from telegram import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -40,22 +40,6 @@ IRRESPECTFUL_KEYWORDS = (
     "careverga",
 )
 
-CANCEL_KEYWORDS = (
-    "no", "cancelar", "cancela", "nada", "olvídelo", "olvídalo",
-    "olvidalo", "no quiero", "ya no", "mejor no", "nop",
-)
-
-CONFIRM_KEYWORDS = (
-    "sí", "si", "confirmar", "confirmo", "acepto", "aceptar",
-    "enviar", "envío", "envio", "dale", "ok", "de acuerdo",
-)
-
-DONE_KEYWORDS = (
-    "listo", "eso es todo", "ya", "terminé", "termine", "completo",
-    "nada más", "nada mas", "no mas", "con eso", "creo que si",
-    "eso sería todo", "eso seria todo", "creo que ya",
-)
-
 NEGATIVE_SENTIMENT_KEYWORDS = (
     "malo", "mala", "horrible", "terrible", "pésimo", "pesimo",
     "deficiente", "negligencia", "negligente", "inaceptable",
@@ -68,110 +52,146 @@ NEGATIVE_SENTIMENT_KEYWORDS = (
     "enojado", "enojada", "furioso", "furiosa", "hartado", "hartada",
 )
 
-FRIENDLY_REJECTION = (
-    "Lo siento, solo puedo ayudarte a registrar solicitudes, quejas, reclamos "
-    "o sugerencias relacionadas con servicios públicos.\n\n"
-    "¿Tienes alguna petición que pueda ayudarte a tramitar? 😊"
-)
-
-PQRS_QUESTIONS = {
-    "queja": [
-        "¿Qué servicio público quieres quejarte?",
-        "¿En qué municipio o localidad ocurrió?",
-        "¿Podrías detallar qué sucedió exactamente?",
-    ],
-    "peticion": [
-        "¿Qué necesitas específicamente?",
-        "¿Para cuándo lo necesitas?",
-        "¿A nombre de quién va la solicitud?",
-    ],
-    "reclamo": [
-        "¿Qué producto o servicio estás reclamando?",
-        "¿Cuál fue el problema?",
-        "¿Qué solución esperas obtener?",
-    ],
-    "sugerencia": [
-        "¿Cuál es tu idea o sugerencia?",
-        "¿Cómo mejoraría el servicio?",
-        "¿En qué área aplicaría?",
-    ],
-}
-
-PQRS_TYPE_LABELS = {
-    "queja": "Queja",
-    "peticion": "Petición",
-    "reclamo": "Reclamo",
-    "sugerencia": "Sugerencia",
-}
-
 GREETING_KEYWORDS = (
     "hola", "buenas", "buen dia", "buenos dias",
     "buenas tardes", "buenas noches",
 )
 
+CONFIRM_KEYWORDS = (
+    "sí", "si", "confirmar", "confirmo", "acepto", "aceptar",
+    "dale", "ok", "de acuerdo",
+)
+
+DONE_KEYWORDS = (
+    "listo", "eso es todo", "ya", "terminé", "termine",
+    "completo", "nada más", "nada mas", "no mas", "con eso",
+    "creo que si", "eso sería todo", "eso seria todo", "creo que ya",
+)
+
 QUESTION_PREFIXES = (
     "que ", "qué ", "quien ", "quién ", "como ", "cómo ",
     "cuando ", "cuándo ", "donde ", "dónde ", "cual ", "cuál ",
-    "cuanto ", "cuánto ",
+    "cuanto ", "cuánto ", "por que ", "por qué ",
 )
 
 GENERAL_QUESTION_PATTERNS = (
     "que dia es hoy", "qué dia es hoy", "qué día es hoy", "que día es hoy",
     "que hora es", "qué hora es", "fecha de hoy", "dia de la semana",
     "cuanto es", "cuánto es", "capital de", "quien es", "quién es",
-    "como estas", "cómo estas", "cómo estás", "como estás",
+    "quien fue", "quién fue", "como estas", "cómo estas",
+    "cómo estás", "como estás", "que puedes hacer", "qué puedes hacer",
+    "que sabes", "qué sabes", "quien te creo", "quién te creó",
 )
 
-PQRS_CONTEXT_KEYWORDS = (
+PQRS_INTENT_KEYWORDS = (
     "pqrs", "peticion", "petición", "queja", "reclamo", "sugerencia",
     "felicitacion", "felicitación", "tramite", "trámite", "servicio",
     "atencion", "atención", "entidad", "alcaldia", "alcaldía", "secretaria",
     "secretaría", "impuesto", "subsidio", "permiso", "licencia", "factura",
     "cobro", "pago", "agua", "luz", "gas", "basura", "transporte",
-    "hospital", "salud", "educacion", "educación", "espacio publico", "espacio público",
+    "hospital", "salud", "educacion", "educación", "espacio publico",
+    "espacio público", "problema", "solicito", "solicitar", "ayuda",
+    "urgente", "denuncia", "denunciar", "malo", "mala", "tardan", "demora", "espera",
+    "esperando", "inconformidad", "frustracion", "frustración",
+    "no me", "no resolv", "no atend", "me cobran", "me cobraron",
+    "quejarme", "reclamar", "reclame", "reclamo", "sugerir", "propongo",
+    "sugerencia", "necesito", "requiero", "pido", "quiero pedir",
+    "abuso", "agresion", "agresión", "violencia", "maltrato", "acosar", "acoso",
+    "policia", "policía", "autoridad", "funcionario", "uniformado",
+    "menor", "menores", "adulto mayor", "anciano", "anciana",
+    "robo", "hurto", "atraco", "asalto", "asaltaron", "robaron", "atracaron",
+    "discriminacion", "discriminación", "racismo", "xenofobia",
+    "corrupcion", "corrupción", "soborno", "cohecho",
+    "extorsion", "extorsión", "amenaza", "amenazas", "intimidacion", "intimidación",
+    "inseguridad", "peligro", "peligroso", "delincuencia", "delito", "delitos",
+    "sancion", "sanción", "castigo", "carcel", "cárcel", "juicio", "juzgado",
+    "asustado", "asustada", "temor", "miedo",
+    "contaminacion", "contaminación", "ruido", "musica", "volumen",
+    "perro", "mascota", "animal", "vecino", "vecina",
+    "via", "vía", "calle", "carrera", "avenida", "carretera", "anden", "andén", "puente",
+    "semaforo", "semáforo", "parque", "plaza", "barrio", "vereda", "corregimiento",
+    "inundacion", "inundación", "deslave", "derrumbe", "hueco", "huecos",
+    "alumbrado", "luminaria", "poste", "transformador",
+    "escuela", "colegio", "universidad", "docente", "profesor",
+    "accidente", "choque", "atropello",
+    "citacion", "citación", "comparendo", "multa", "infraccion", "infracción",
+    "reportar", "reporto", "delatar",
 )
 
-PQRS_EXPERIENCE_KEYWORDS = (
-    "servicio al cliente", "atencion al cliente", "atención al cliente",
-    "me dejaron esperando", "mucho tiempo", "sin solucion", "sin solución",
-    "no me dieron", "mala experiencia", "inconformidad", "frustracion", "frustración",
-    "no resolvieron", "no solucionaron", "demora", "demorado",
-    "peticion", "petición", "queja", "reclamo", "sugerencia", "felicitacion", "felicitación",
+PQRS_CONTEXT_KEYWORDS = (
+    "menor", "menores", "anciano", "anciana", "adulto mayor",
+    "calle", "barrio", "via", "vía", "avenida", "carrera", "parque", "plaza",
+    "hueco", "huecos", "semaforo", "semáforo", "alumbrado", "poste",
+    "perro", "mascota", "animal", "vecino", "vecina",
+    "robo", "hurto", "atraco", "asalto",
+    "policia", "policía", "funcionario", "uniformado",
+    "alcaldia", "alcaldía", "secretaria", "secretaría", "hospital", "colegio", "escuela",
+    "abuso", "agresion", "agresión", "violencia", "maltrato", "amenaza",
+)
+
+NEED_VERBS = (
+    "necesito", "necesitamos", "solicito", "solicitar", "requiero",
+    "pido", "quiero pedir", "me pueden", "me pueden ayudar",
+    "ayuda", "ayudenme", "auxilio", "por favor",
+    "quiero", "solicita", "pedir", "tengo que",
+)
+
+VALIDATION_PROMPT = (
+    "Eres un validador de suficiencia para un sistema de PQRS de una "
+    "Alcaldía colombiana. Tu único objetivo es determinar si el texto "
+    "del ciudadano provee suficiente contexto informativo para entender "
+    "QUÉ quiere, QUÉ le pasa o QUÉ reporta.\n\n"
+    "Responde EXCLUSIVAMENTE con un JSON válido, sin texto adicional, "
+    "sin markdown, sin explicaciones fuera del JSON:\n"
+    '{{"valido": true, "razon": "..."}} '
+    'o {{"valido": false, "razon": "..."}}\n\n'
+    "El campo 'razon' debe ser MUY breve (máx 8 palabras) explicando "
+    "por qué es válido o inválido.\n\n"
+    "RECHAZA (valido=false) cuando:\n"
+    "1. Saludos o cortesía aislada: 'hola', 'buenas tardes', 'buenos días'.\n"
+    "2. Expresiones vagas sin objeto: 'tuve un problema', 'necesito ayuda', "
+    "'tengo una duda', 'quiero poner algo' (sin especificar qué).\n"
+    "3. Texto sin sentido, spam, emojis solos, caracteres repetidos.\n"
+    "4. Preguntas generales no relacionadas: 'qué día es hoy', 'cómo estás'.\n"
+    "5. Confusiones con el bot: 'qué puedes hacer', 'quién te creó'.\n\n"
+    "ACEPTA (valido=true) cuando el texto mencione al menos UNO de:\n"
+    "1. Acción concreta del ciudadano: 'quiero pedir', 'solicito', 'necesito [X]'.\n"
+    "2. Hecho reportado: 'me cobraron de más', 'no me llegó el recibo', "
+    "'me atendieron mal'.\n"
+    "3. Servicio público o entidad: 'alcaldía', 'salud', 'agua', 'luz', "
+    "'secretaría', 'trámite'.\n"
+    "4. Lugar, dirección o sede: 'calle 10', 'barrio centro', 'sede norte'.\n"
+    "5. Queja sobre funcionario o proceso: 'me exigieron', 'me negaron'.\n"
+    "6. Solicitud de documento: 'certificado', 'licencia', 'permiso'.\n\n"
+    "Texto a validar: {texto}\n\n"
+    "JSON:"
+)
+
+STATE_AWAITING_ID_TYPE = "awaiting_id_type"
+STATE_AWAITING_DOCUMENTO = "awaiting_documento"
+STATE_AWAITING_NOMBRE = "awaiting_nombre"
+STATE_AWAITING_EMAIL = "awaiting_email"
+STATE_AWAITING_CASE = "awaiting_case"
+STATE_AWAITING_OCR_VALIDATION = "awaiting_ocr_validation"
+STATE_READY_TO_SEND = "ready_to_send"
+
+ACTIVE_STATES = (
+    STATE_AWAITING_ID_TYPE,
+    STATE_AWAITING_DOCUMENTO,
+    STATE_AWAITING_NOMBRE,
+    STATE_AWAITING_EMAIL,
+    STATE_AWAITING_CASE,
+    STATE_AWAITING_OCR_VALIDATION,
+    STATE_READY_TO_SEND,
 )
 
 MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
-DRAFT_TIMEOUT_SECONDS = 600
+DRAFT_TIMEOUT_SECONDS = int(os.getenv("DRAFT_TIMEOUT_SECONDS", "600"))
+OLLAMA_VISION_MODEL = os.getenv("OLLAMA_VISION_MODEL") or os.getenv("OLLAMA_MODEL", "gemma4:31b").strip()
+OLLAMA_VISION_TIMEOUT = int(os.getenv("OLLAMA_VISION_TIMEOUT", "60"))
 
-CLASSIFIER_PROMPT = (
-    "Eres Alexa, asistente de la secretaría del estado colombiano.\n"
-    "Analiza el mensaje del usuario y determina si:\n\n"
-    "1. Quiere hacer una solicitud, queja, reclamo, sugerencia o felicitación "
-    "relacionada con servicios públicos, trámites o atención institucional.\n"
-    "2. Es un saludo o pregunta sobre ti (el bot).\n"
-    "3. Es un tema ajeno a servicios del gobierno (hora, fecha, chistes, etc.)\n\n"
-    "Responde SOLO con un JSON:\n"
-    "- {{\"tipo\": \"pqrs\"}} si es una solicitud ciudadana\n"
-    "- {{\"tipo\": \"saludo\"}} si es saludo o pregunta sobre el bot\n"
-    "- {{\"tipo\": \"otro\"}} si es tema ajeno\n\n"
-    "Mensaje: {texto}"
-)
-
-GUIDANCE_PROMPT = (
-    "Eres Alexa, la asistente de la secretaría del estado colombiano.\n\n"
-    "El usuario te acaba de contar un problema o solicitud relacionada con servicios públicos.\n"
-    "Tu tarea es generar 2-3 preguntas breves para obtener más detalles y poder registrar la solicitud.\n\n"
-    "Reglas:\n"
-    "- Solo incluye preguntas que NO estén ya respondidas en el mensaje del usuario.\n"
-    "- Sé específica y directa.\n"
-    "- Usa un tono amable y cercano.\n"
-    "- NO incluyas saludos ni despedidas.\n"
-    "- Responde SOLO con las preguntas, una por línea, sin numeración ni viñetas.\n"
-    "- Ejemplo de respuesta válida:\n"
-    "  ¿Qué sucedió exactamente?\n"
-    "  ¿Cuándo ocurrió?\n"
-    "  ¿En qué sede o lugar fue?\n\n"
-    "Mensaje del usuario: {user_message}"
-)
+VALIDATION_TIMEOUT = int(os.getenv("VALIDATION_TIMEOUT", "15"))
+VALIDATION_TEMPERATURE = float(os.getenv("VALIDATION_TEMPERATURE", "0.1"))
 
 memory_store = PQRSMemoryStore()
 
@@ -194,61 +214,6 @@ def detect_negative_sentiment(text: str) -> bool:
     return any(keyword in normalized for keyword in NEGATIVE_SENTIMENT_KEYWORDS)
 
 
-def _is_greeting(text: str) -> bool:
-    normalized = text.lower().strip()
-    return any(normalized.startswith(kw) for kw in GREETING_KEYWORDS)
-
-
-def _is_cancel(text: str) -> bool:
-    normalized = text.lower().strip()
-    return normalized in CANCEL_KEYWORDS or any(normalized.startswith(kw) for kw in CANCEL_KEYWORDS)
-
-
-def _is_confirm(text: str) -> bool:
-    normalized = text.lower().strip()
-    return normalized in CONFIRM_KEYWORDS or any(normalized.startswith(kw) for kw in CONFIRM_KEYWORDS)
-
-
-def _is_done(text: str) -> bool:
-    normalized = text.lower().strip()
-    return normalized in DONE_KEYWORDS or any(normalized.startswith(kw) for kw in DONE_KEYWORDS)
-
-
-def _looks_out_of_scope_question(text: str) -> bool:
-    normalized = " ".join(text.lower().strip().split())
-    if any(pattern in normalized for pattern in GENERAL_QUESTION_PATTERNS):
-        return True
-    if "?" in normalized and any(normalized.startswith(prefix) for prefix in QUESTION_PREFIXES):
-        return not any(keyword in normalized for keyword in PQRS_CONTEXT_KEYWORDS)
-    return False
-
-
-def _looks_like_pqrs(text: str) -> bool:
-    normalized = " ".join(text.lower().strip().split())
-    if any(keyword in normalized for keyword in PQRS_CONTEXT_KEYWORDS):
-        return True
-    return any(keyword in normalized for keyword in PQRS_EXPERIENCE_KEYWORDS)
-
-
-def _extract_details_from_text(text: str, pending_questions: list[str]) -> dict[str, str]:
-    details = {}
-    normalized = text.lower().strip()
-
-    if any(kw in normalized for kw in ("qué pasó", "que pasó", "que paso", "qué pasó", "qué sucedió", "que sucedio")):
-        details["Qué pasó"] = text
-    elif any(kw in normalized for kw in ("cuándo", "cuando", "qué día", "que dia", "fecha")):
-        details["Cuándo"] = text
-    elif any(kw in normalized for kw in ("dónde", "donde", "en qué", "en que", "lugar", "sede", "ubicación")):
-        details["Dónde"] = text
-    else:
-        if pending_questions:
-            details[pending_questions[0]] = text
-        else:
-            details["Información adicional"] = text
-
-    return details
-
-
 def detect_pqrs_type(text: str) -> str:
     normalized = text.lower().strip()
     if any(kw in normalized for kw in ("queja", "quejarme", "inconformidad", "inconforme", "molesto", "enojado", "frustrado", "mal servicio", "mala atención", "pésimo", "horrible")):
@@ -257,131 +222,140 @@ def detect_pqrs_type(text: str) -> str:
         return "reclamo"
     if any(kw in normalized for kw in ("sugerencia", "sugerir", "propongo", "propuesta", "recomendación", "deberían", "podrían mejorar")):
         return "sugerencia"
-    if any(kw in normalized for kw in ("petición", "peticion", "solicito", "solicitar", "necesito", "requiero", "pido", "quiero pedir")):
-        return "peticion"
     return "peticion"
 
 
-def is_valid_answer(text: str) -> bool:
-    if _is_greeting(text):
+def is_valid_documento(text: str) -> bool:
+    cleaned = text.strip()
+    if not cleaned.isdigit():
         return False
-    if _is_done(text) or _is_cancel(text) or _is_confirm(text):
-        return False
-    if _looks_out_of_scope_question(text) and not _looks_like_pqrs(text):
-        return False
+    return 6 <= len(cleaned) <= 15
+
+
+def is_valid_email(text: str) -> bool:
+    pattern = r"^[\w.+-]+@[\w-]+\.[\w.-]+$"
+    return bool(re.match(pattern, text.strip()))
+
+
+def is_valid_nombre(text: str) -> bool:
     words = text.strip().split()
     if len(words) < 2:
         return False
-    alpha_chars = [c for c in text if c.isalpha()]
-    if len(alpha_chars) < 4:
-        return False
+    for word in words:
+        if len(word) < 2:
+            return False
+        if not all(c.isalpha() or c.isspace() for c in word):
+            return False
     return True
 
 
-def get_questions_for_type(pqrs_type: str) -> list[str]:
-    return list(PQRS_QUESTIONS.get(pqrs_type, PQRS_QUESTIONS["peticion"]))
+def _is_greeting(text: str) -> bool:
+    normalized = text.lower().strip()
+    if not normalized:
+        return False
+    return any(normalized == kw or normalized.startswith(kw) for kw in GREETING_KEYWORDS)
 
 
-async def classify_message(text: str, llm: ChatOllama) -> dict:
+def _is_confirm(text: str) -> bool:
+    normalized = text.lower().strip()
+    if not normalized:
+        return False
+    return normalized in CONFIRM_KEYWORDS
+
+
+def _is_done(text: str) -> bool:
+    normalized = text.lower().strip()
+    if not normalized:
+        return False
+    return normalized in DONE_KEYWORDS or any(normalized.startswith(kw) for kw in DONE_KEYWORDS)
+
+
+def _looks_out_of_scope_question(text: str) -> bool:
+    normalized = " ".join(text.lower().strip().split())
+    if any(pattern in normalized for pattern in GENERAL_QUESTION_PATTERNS):
+        return True
+    if "?" in normalized and any(normalized.startswith(prefix) for prefix in QUESTION_PREFIXES):
+        return not any(keyword in normalized for keyword in PQRS_INTENT_KEYWORDS)
+    return False
+
+
+def _looks_like_pqrs(text: str) -> bool:
+    normalized = " ".join(text.lower().strip().split())
+    return any(keyword in normalized for keyword in PQRS_INTENT_KEYWORDS)
+
+
+def is_valid_case(text: str) -> bool:
+    if not text or not text.strip():
+        return False
     if _is_greeting(text):
-        return {"tipo": "saludo"}
-    if _looks_out_of_scope_question(text) and not _looks_like_pqrs(text):
-        return {"tipo": "otro"}
+        return False
+    if _is_confirm(text) or _is_done(text):
+        return False
+    if _looks_out_of_scope_question(text):
+        return False
+    words = text.strip().split()
+    if len(words) < 3:
+        return False
+    normalized = text.lower()
+    if any(kw in normalized for kw in PQRS_INTENT_KEYWORDS):
+        return True
+    context_matches = sum(1 for kw in PQRS_CONTEXT_KEYWORDS if kw in normalized)
+    if context_matches >= 2 and len(words) >= 4:
+        return True
+    if len(words) >= 5 and any(v in normalized for v in NEED_VERBS):
+        return True
+    return False
+
+
+def _fallback_validation(text: str) -> tuple[bool, str]:
+    """Si el LLM falla, usar is_valid_case() como fallback."""
+    if is_valid_case(text):
+        return True, "válido por palabras clave"
+    return False, "no parece ser una solicitud, queja o reclamo"
+
+
+async def validate_case_with_llm(text: str) -> tuple[bool, str]:
+    """Retorna (valido, razon). Si falla, fallback a is_valid_case()."""
+    api_key = os.getenv("OLLAMA_API_KEY", "").strip()
+    base_url = os.getenv("OLLAMA_BASE_URL", "https://ollama.com").strip()
+    model = os.getenv("OLLAMA_MODEL", "gemma4:31b").strip()
+
     try:
-        prompt = ChatPromptTemplate.from_messages([("human", CLASSIFIER_PROMPT)])
-        chain = prompt | llm | StrOutputParser()
-        raw = await chain.ainvoke({"texto": text})
-        clean = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-        result = json.loads(clean)
-        if "tipo" not in result:
-            raise ValueError("Clave 'tipo' faltante")
-        if result.get("tipo") == "otro" and _looks_like_pqrs(text):
-            return {"tipo": "pqrs"}
-        if result.get("tipo") == "pqrs" and _looks_out_of_scope_question(text) and not _looks_like_pqrs(text):
-            return {"tipo": "otro"}
-        return result
+        async with httpx.AsyncClient(timeout=VALIDATION_TIMEOUT) as client:
+            response = await client.post(
+                f"{base_url}/api/generate",
+                headers={"Authorization": f"Bearer {api_key}"},
+                json={
+                    "model": model,
+                    "prompt": VALIDATION_PROMPT.format(texto=text),
+                    "stream": False,
+                    "options": {"temperature": VALIDATION_TEMPERATURE},
+                },
+            )
+            response.raise_for_status()
+            data = response.json()
+            raw = (data.get("response") or "").strip()
+
+        match = re.search(r'\{[^{}]*"valido"[^{}]*\}', raw, re.DOTALL)
+        if not match:
+            logger.warning("LLM validation: no JSON in response, falling back. Raw: %s", raw[:200])
+            return _fallback_validation(text)
+
+        result = json.loads(match.group())
+        return bool(result.get("valido")), str(result.get("razon", ""))
+
+    except httpx.TimeoutException:
+        logger.warning("LLM validation timeout (%ds), falling back to keywords", VALIDATION_TIMEOUT)
+        return _fallback_validation(text)
+    except httpx.HTTPError as exc:
+        logger.warning("LLM validation HTTP error, falling back: %s", exc)
+        return _fallback_validation(text)
+    except json.JSONDecodeError as exc:
+        logger.warning("LLM validation returned malformed JSON, falling back: %s", exc)
+        return _fallback_validation(text)
     except Exception as exc:
-        logger.warning("Clasificador fallo, usando heuristica local: %s", exc)
-        if _looks_like_pqrs(text):
-            return {"tipo": "pqrs"}
-        return {"tipo": "otro"}
-
-
-async def generate_guidance_questions(text: str, llm: ChatOllama) -> list[str]:
-    try:
-        prompt = ChatPromptTemplate.from_messages([("human", GUIDANCE_PROMPT)])
-        chain = prompt | llm | StrOutputParser()
-        raw = await chain.ainvoke({"user_message": text})
-        questions = [q.strip() for q in raw.strip().split("\n") if q.strip() and "?" in q]
-        return questions[:3]
-    except Exception as exc:
-        logger.warning("Error generando preguntas de guía: %s", exc)
-        return [
-            "¿Qué sucedió exactamente?",
-            "¿Cuándo ocurrió?",
-            "¿En qué sede o lugar fue?",
-        ]
-
-
-def build_pqrs_json(update: Update, message_text: str) -> dict:
-    user = update.effective_user
-    return {
-        "radicado": str(uuid.uuid4())[:8].upper(),
-        "pqrs": message_text,
-        "canal": "telegram",
-        "fecha_utc": datetime.now(timezone.utc).isoformat(),
-        "username": user.username if user else None,
-        "nombre": user.full_name if user else None,
-    }
-
-
-def build_confirmation_keyboard() -> InlineKeyboardMarkup:
-    keyboard = [
-        [
-            InlineKeyboardButton("✅ Confirmar", callback_data="confirm"),
-            InlineKeyboardButton("✏️ Editar", callback_data="edit"),
-        ],
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-
-def build_cancel_keyboard() -> InlineKeyboardMarkup:
-    keyboard = [
-        [
-            InlineKeyboardButton("📝 Escribir nueva", callback_data="new_pqrs"),
-            InlineKeyboardButton("✏️ Continuar con esta", callback_data="continue_pqrs"),
-        ],
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-
-def build_done_keyboard() -> InlineKeyboardMarkup:
-    keyboard = [
-        [
-            InlineKeyboardButton("✅ Listo, enviar solicitud", callback_data="finish_details"),
-            InlineKeyboardButton("➕ Agregar más detalles", callback_data="add_more"),
-        ],
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-
-def build_validation_keyboard() -> InlineKeyboardMarkup:
-    keyboard = [
-        [
-            InlineKeyboardButton("🔄 Reintentar", callback_data="retry_answer"),
-            InlineKeyboardButton("⏭️ Saltar pregunta", callback_data="skip_question"),
-        ],
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-
-def build_confirmation_message(draft_text: str, is_update: bool = False) -> str:
-    prefix = "📝 *Tu solicitud actualizada:*" if is_update else "📝 *Tu solicitud:*"
-    return (
-        f"{prefix}\n\n"
-        f"_{draft_text}_\n\n"
-        f"¿Deseas confirmar el envío?"
-    )
+        logger.exception("Unexpected error in LLM validation, falling back: %s", exc)
+        return _fallback_validation(text)
 
 
 def build_empathy_message(text: str) -> str:
@@ -397,39 +371,109 @@ def build_empathy_message(text: str) -> str:
     return "Gracias por contarme tu experiencia 😔. Voy a revisar tu solicitud."
 
 
-def build_llm() -> ChatOllama:
-    model_name = os.getenv("OLLAMA_MODEL", "gemma4:31b").strip()
-    api_key = os.getenv("OLLAMA_API_KEY", "").strip()
-    base_url = os.getenv("OLLAMA_BASE_URL", "https://ollama.com").strip()
-    return ChatOllama(
-        model=model_name,
-        temperature=0.4,
-        base_url=base_url,
-        client_kwargs={"headers": {"Authorization": f"Bearer {api_key}"}},
+def build_identification_keyboard() -> InlineKeyboardMarkup:
+    keyboard = [
+        [
+            InlineKeyboardButton("👤 Radicar Identificado", callback_data="id_identificado"),
+            InlineKeyboardButton("🕵️ Radicar Anónimo", callback_data="id_anonimo"),
+        ],
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+def build_identification_back_keyboard() -> InlineKeyboardMarkup:
+    keyboard = [
+        [InlineKeyboardButton("↩️ Empezar de nuevo", callback_data="restart_identification")],
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+def build_send_keyboard() -> InlineKeyboardMarkup:
+    keyboard = [
+        [
+            InlineKeyboardButton("🚀 Enviar Solicitud", callback_data="send_request"),
+            InlineKeyboardButton("✏️ Corregir", callback_data="edit_case"),
+        ],
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+def build_ocr_validation_keyboard() -> InlineKeyboardMarkup:
+    keyboard = [
+        [
+            InlineKeyboardButton("👍 Sí, continuar", callback_data="ocr_yes"),
+            InlineKeyboardButton("📝 No, volver a escribir", callback_data="ocr_no"),
+        ],
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+def build_invalid_case_keyboard() -> InlineKeyboardMarkup:
+    keyboard = [
+        [InlineKeyboardButton("↩️ Volver a escribir caso", callback_data="retry_case")],
+        [InlineKeyboardButton("↩️ Empezar de nuevo", callback_data="restart_identification")],
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+def build_case_preview(descripcion_caso: str) -> str:
+    return (
+        "📋 *Vista previa de tu caso:*\n\n"
+        f"```\n{escape_text(descripcion_caso)}\n```\n\n"
+        "¿Está correcto?"
     )
 
 
-def build_chain(llm: ChatOllama):
-    prompt = ChatPromptTemplate.from_messages([
-        (
-            "system",
-            "Eres Alexa, la asistente virtual de la secretaria del estado colombiano.\n\n"
-            "Tu personalidad:\n"
-            "- Eres cercana, amigable y empatica.\n"
-            "- Te presentas como 'Alexa' y usas un tono amable y profesional.\n"
-            "- Cuando el usuario exprese una queja o experiencia negativa, primero reconoces "
-            "su sentir con empatia antes de ofrecer ayuda.\n"
-            "- Guias al usuario paso a paso para registrar su solicitud.\n"
-            "- Usas emojis con moderacion para ser mas cercana.\n"
-            "- Respondes en espanol colombiano.\n\n"
-            "Tu funcion:\n"
-            "- Recibir y canalizar solicitudes PQRSD (peticiones, quejas, reclamos, sugerencias, felicitaciones).\n"
-            "- Cuando el usuario envie una solicitud, confirma que la recibiras y la enviaras al area competente.\n"
-            "- Si el usuario esta enojado o frustrado, valida su sentir con empatia.",
-        ),
-        ("human", "{user_message}"),
-    ])
-    return prompt | llm | StrOutputParser()
+def build_pqrs_json(update: Update, draft) -> dict:
+    user = update.effective_user
+    payload = {
+        "tipo_usuario": draft.tipo_usuario,
+        "descripcion_caso": draft.descripcion_caso,
+        "pqrs_type": draft.pqrs_type,
+        "irrespetuosa": draft.irrespetuosa,
+    }
+    if draft.tipo_usuario == "Identificado":
+        payload["identificacion"] = {
+            "documento": draft.documento,
+            "nombre": draft.nombre_completo,
+            "email": draft.email,
+        }
+    return {
+        "radicado": str(uuid.uuid4())[:8].upper(),
+        "pqrs": json.dumps(payload, ensure_ascii=False),
+        "canal": "telegram",
+        "fecha_utc": datetime.now(timezone.utc).isoformat(),
+        "username": user.username if user else None,
+        "nombre": user.full_name if user else None,
+    }
+
+
+async def extract_text_from_image(image_bytes: bytes) -> str:
+    image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+    api_key = os.getenv("OLLAMA_API_KEY", "").strip()
+    base_url = os.getenv("OLLAMA_BASE_URL", "https://ollama.com").strip()
+    async with httpx.AsyncClient(timeout=OLLAMA_VISION_TIMEOUT) as client:
+        response = await client.post(
+            f"{base_url}/api/chat",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={
+                "model": OLLAMA_VISION_MODEL,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": (
+                            "Extract all visible text from this image exactly as it appears. "
+                            "Return ONLY the extracted text, no commentary, no markdown, no preamble."
+                        ),
+                        "images": [image_b64],
+                    }
+                ],
+                "stream": False,
+            },
+        )
+        response.raise_for_status()
+        data = response.json()
+        return (data.get("message", {}).get("content") or "").strip()
 
 
 async def save_to_database(pqrs_json: dict) -> bool:
@@ -437,15 +481,18 @@ async def save_to_database(pqrs_json: dict) -> bool:
     return True
 
 
-async def persist_pqrs(pqrs_json: dict) -> tuple[bool, str]:
+async def persist_pqrs(pqrs_json: dict) -> None:
     for attempt in range(MAX_RETRIES):
         try:
             await save_to_database(pqrs_json)
             logger.info("PQRS guardada en BD. Radicado: %s", pqrs_json["radicado"])
-            return True, "base_de_datos"
+            return
         except Exception as exc:
             wait = 2 ** attempt
-            logger.warning("Intento %d/%d fallido: %s. Reintentando en %ds...", attempt + 1, MAX_RETRIES, exc, wait)
+            logger.warning(
+                "Intento %d/%d fallido: %s. Reintentando en %ds...",
+                attempt + 1, MAX_RETRIES, exc, wait,
+            )
             if attempt < MAX_RETRIES - 1:
                 await asyncio.sleep(wait)
     raise RuntimeError("No fue posible guardar la PQRS en PostgreSQL.")
@@ -454,225 +501,326 @@ async def persist_pqrs(pqrs_json: dict) -> tuple[bool, str]:
 async def cleanup_draft(context: CallbackContext) -> None:
     chat_id = context.job.data
     draft = memory_store.get(chat_id)
-    if draft is None or draft.status not in ("collecting_details", "pending_confirmation"):
+    if draft is None or draft.status not in ACTIVE_STATES:
         return
     memory_store.clear(chat_id)
     try:
         await context.bot.send_message(
             chat_id=chat_id,
             text="⏰ Tu borrador ha expirado por inactividad.\n"
-                 "Si deseas registrar una nueva solicitud, envíamela cuando quieras.",
+                 "Si deseas registrar una nueva solicitud, envía /start.",
         )
     except Exception as exc:
         logger.warning("No se pudo enviar notificación de timeout a %s: %s", chat_id, exc)
 
 
+def _schedule_timeout(context, chat_id: int, draft) -> None:
+    try:
+        if draft.timeout_task is not None and not draft.timeout_task.done():
+            draft.timeout_task.cancel()
+        job = context.job_queue.run_once(
+            cleanup_draft,
+            when=DRAFT_TIMEOUT_SECONDS,
+            data=chat_id,
+            chat_id=chat_id,
+            name=f"draft_timeout_{chat_id}",
+        )
+        draft.timeout_task = job
+        memory_store._drafts[chat_id] = draft
+    except Exception as exc:
+        logger.warning("No se pudo programar timeout para borrador %s: %s", chat_id, exc)
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     memory_store.clear(chat_id)
+    memory_store.set(chat_id, status=STATE_AWAITING_ID_TYPE)
     await update.message.reply_text(
         "¡Hola! Soy Alexa 👋, tu asistente de la secretaría.\n\n"
-        "Estoy aquí para recibir tu solicitud y enviarla al área competente.\n\n"
-        "Puedes contarme peticiones, quejas, reclamos, sugerencias o felicitaciones.\n"
-        "No necesitas ser formal, cuéntame con tus propias palabras 😊"
+        "Para radicar tu solicitud, primero dime cómo prefieres identificarte:",
+        reply_markup=build_identification_keyboard(),
+    )
+    draft = memory_store.get(chat_id)
+    _schedule_timeout(context, chat_id, draft)
+
+
+async def _show_identification_step(
+    query: CallbackQuery, draft, step: str
+) -> None:
+    keyboard = build_identification_back_keyboard()
+    if step == STATE_AWAITING_DOCUMENTO:
+        text = "Perfecto ✅\n\n📝 *1/3* ¿Cuál es tu número de documento de identidad (cédula o DNI)?"
+    elif step == STATE_AWAITING_NOMBRE:
+        text = "✅ Documento registrado.\n\n📝 *2/3* ¿Cuál es tu nombre completo?"
+    elif step == STATE_AWAITING_EMAIL:
+        text = "✅ Nombre registrado.\n\n📝 *3/3* ¿Cuál es tu correo electrónico?"
+    else:
+        return
+    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=keyboard)
+
+
+async def _handle_awaiting_documento(update, context, draft, user_text: str) -> None:
+    chat_id = update.effective_chat.id
+    if is_valid_documento(user_text):
+        draft.documento = user_text.strip()
+        draft.status = STATE_AWAITING_NOMBRE
+        memory_store._drafts[chat_id] = draft
+        await update.message.reply_text(
+            "✅ Documento registrado.\n\n📝 *2/3* ¿Cuál es tu nombre completo?",
+            parse_mode="Markdown",
+            reply_markup=build_identification_back_keyboard(),
+        )
+    else:
+        await update.message.reply_text(
+            "⚠️ Ese documento no parece válido. Debe tener entre 6 y 15 dígitos, solo números.",
+            reply_markup=build_identification_back_keyboard(),
+        )
+
+
+async def _handle_awaiting_nombre(update, context, draft, user_text: str) -> None:
+    chat_id = update.effective_chat.id
+    if is_valid_nombre(user_text):
+        draft.nombre_completo = user_text.strip()
+        draft.status = STATE_AWAITING_EMAIL
+        memory_store._drafts[chat_id] = draft
+        await update.message.reply_text(
+            "✅ Nombre registrado.\n\n📝 *3/3* ¿Cuál es tu correo electrónico?",
+            parse_mode="Markdown",
+            reply_markup=build_identification_back_keyboard(),
+        )
+    else:
+        await update.message.reply_text(
+            "⚠️ Ese nombre no parece válido. Escribe al menos nombre y apellido, solo letras.",
+            reply_markup=build_identification_back_keyboard(),
+        )
+
+
+async def _handle_awaiting_email(update, context, draft, user_text: str) -> None:
+    chat_id = update.effective_chat.id
+    if is_valid_email(user_text):
+        draft.email = user_text.strip()
+        draft.status = STATE_AWAITING_CASE
+        memory_store._drafts[chat_id] = draft
+        await _show_case_instruction(update, chat_id, draft, context)
+    else:
+        await update.message.reply_text(
+            "⚠️ Ese correo no parece válido. Intenta con formato: usuario@dominio.com",
+            reply_markup=build_identification_back_keyboard(),
+        )
+
+
+async def _show_case_instruction(update_or_query, chat_id: int, draft, context=None) -> None:
+    text = (
+        "Perfecto ✅\n\n"
+        "Por favor, cuéntanos en detalle tu caso. Puedes escribir el texto directamente aquí "
+        "o, si tienes una carta o documento impreso, tómale una foto nítida y envíala. "
+        "Nuestro sistema procesará la información automáticamente.\n\n"
+        "⚠️ *Nota:* No se reciben archivos en formato PDF o Word, únicamente texto o fotos."
+    )
+    if hasattr(update_or_query, "edit_message_text"):
+        await update_or_query.edit_message_text(text, parse_mode="Markdown")
+    else:
+        await update_or_query.message.reply_text(text, parse_mode="Markdown")
+
+
+async def _handle_awaiting_case_text(update, context, draft, user_text: str) -> None:
+    chat_id = update.effective_chat.id
+
+    # Capa 1: validación rápida por keywords
+    if not is_valid_case(user_text):
+        await update.message.reply_text(
+            "🤔 Hmm, eso no parece ser una solicitud, queja o reclamo. "
+            "¿Podrías contarme con más detalle qué necesitas o qué problema tuviste?",
+            reply_markup=build_invalid_case_keyboard(),
+        )
+        return
+
+    # Capa 2: validación semántica con LLM
+    await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+    valido, razon = await validate_case_with_llm(user_text)
+    if not valido:
+        await update.message.reply_text(
+            f"❌ Tu mensaje no tiene suficiente contexto para registrarlo.\n\n"
+            f"📝 Razón: {razon}\n\n"
+            f"Por favor, cuéntame con más detalle qué necesitas. Por ejemplo:\n"
+            f"• \"Necesito una cita con el doctor\"\n"
+            f"• \"Quiero reclamar un cobro indebido de la factura de luz\"\n"
+            f"• \"El servicio de agua en el barrio centro está pésimo\"",
+            reply_markup=build_invalid_case_keyboard(),
+        )
+        return
+
+    updated = memory_store.update_case(chat_id, user_text)
+    if updated is None:
+        memory_store.set(chat_id, status=STATE_AWAITING_CASE)
+        await update.message.reply_text("Hubo un problema al guardar tu caso. Intenta de nuevo.")
+        return
+
+    updated.descripcion_caso = user_text.strip()
+    updated.pqrs_type = detect_pqrs_type(user_text)
+    updated.irrespetuosa = check_offensive_language(user_text)
+    updated.status = STATE_READY_TO_SEND
+    memory_store._drafts[chat_id] = updated
+
+    if detect_negative_sentiment(user_text):
+        empathy = build_empathy_message(user_text)
+        await update.message.reply_text(empathy)
+        await asyncio.sleep(1)
+
+    await update.message.reply_text(
+        build_case_preview(updated.descripcion_caso),
+        parse_mode="Markdown",
+        reply_markup=build_send_keyboard(),
     )
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_text = (update.message.text or "").strip()
+    if update.message is None or update.message.text is None:
+        return
+    user_text = update.message.text.strip()
     if not user_text:
         return
 
     chat_id = update.effective_chat.id
-    llm = context.application.bot_data["llm"]
-    chain = context.application.bot_data["chain"]
-
     draft = memory_store.get(chat_id)
 
-    if draft is not None and draft.status == "collecting_details":
-        if _is_greeting(user_text):
-            memory_store.clear(chat_id)
-            try:
-                response = await chain.ainvoke({"user_message": user_text})
-                await update.message.reply_text(response)
-            except Exception:
-                await update.message.reply_text("¡Hola! Soy Alexa. ¿En qué puedo ayudarte?")
-            return
-
-        if _is_cancel(user_text):
-            keyboard = build_cancel_keyboard()
-            await update.message.reply_text(
-                "¿Qué deseas hacer?",
-                reply_markup=keyboard,
-            )
-            return
-
-        if not draft.pending_questions:
-            questions = get_questions_for_type(draft.pqrs_type)
-            draft.pending_questions = questions
-            memory_store._drafts[chat_id] = draft
-
-        current_question = draft.pending_questions[0]
-
-        if not is_valid_answer(user_text):
-            type_label = PQRS_TYPE_LABELS.get(draft.pqrs_type, "Solicitud")
-            await update.message.reply_text(
-                f"🤔 Esa respuesta no parece ser la información que necesito para tu {type_label.lower()}.\n\n"
-                f"¿Podrías responder la pregunta que te hice?\n\n"
-                f"👉 *{current_question}*",
-                parse_mode="Markdown",
-                reply_markup=build_validation_keyboard(),
-            )
-            return
-
-        draft.collected_details[current_question] = user_text.strip()
-        draft.pending_questions = draft.pending_questions[1:]
-        memory_store._drafts[chat_id] = draft
-
-        if draft.pending_questions:
-            next_q = draft.pending_questions[0]
-            progress = f"({len(draft.collected_details)}/{len(draft.collected_details) + len(draft.pending_questions)})"
-            await update.message.reply_text(
-                f"Perfecto, gracias 😊 {progress}\n\n"
-                f"👉 *{next_q}*",
-                parse_mode="Markdown",
-                reply_markup=build_done_keyboard(),
-            )
-        else:
-            await update.message.reply_text(
-                "¡Excelente! Tengo toda la información necesaria 🎉\n\n"
-                "Revisemos tu solicitud antes de enviarla.",
-                reply_markup=build_done_keyboard(),
-            )
+    if draft is None:
+        await update.message.reply_text(
+            "Para iniciar una solicitud, envía /start y elige cómo prefieres identificarte. 👋"
+        )
         return
 
-    if draft is not None and draft.status == "pending_confirmation":
-        if _is_greeting(user_text):
-            memory_store.clear(chat_id)
-            try:
-                response = await chain.ainvoke({"user_message": user_text})
-                await update.message.reply_text(response)
-            except Exception:
-                await update.message.reply_text("¡Hola! Soy Alexa. ¿En qué puedo ayudarte?")
-            return
+    if draft.status == STATE_AWAITING_ID_TYPE:
+        await update.message.reply_text(
+            "Por favor elige una de las opciones del menú 👆",
+            reply_markup=build_identification_keyboard(),
+        )
+        return
 
-        if _is_cancel(user_text):
-            keyboard = build_cancel_keyboard()
-            await update.message.reply_text(
-                "¿Qué deseas hacer?",
-                reply_markup=keyboard,
-            )
-            return
+    if draft.status == STATE_AWAITING_DOCUMENTO:
+        await _handle_awaiting_documento(update, context, draft, user_text)
+        return
 
-        if _is_confirm(user_text):
-            pqrs_json = build_pqrs_json(update, draft.get_full_text())
-            radicado = pqrs_json["radicado"]
-            memory_store.clear(chat_id)
-            try:
-                await persist_pqrs(pqrs_json)
-                await update.message.reply_text(
-                    f"✅ Tu solicitud quedó registrada.\n\n*Radicado:* #{radicado}",
-                    parse_mode="Markdown",
-                )
-            except Exception as exc:
-                logger.exception("Error al persistir PQRS %s: %s", radicado, exc)
-                await update.message.reply_text(
-                    "No fue posible registrar tu solicitud en este momento. "
-                    "Intenta de nuevo o contacta a soporte."
-                )
-            return
+    if draft.status == STATE_AWAITING_NOMBRE:
+        await _handle_awaiting_nombre(update, context, draft, user_text)
+        return
 
-        updated = memory_store.update_text(chat_id, user_text)
-        if updated is None:
-            memory_store.clear(chat_id)
-            await update.message.reply_text("Tu borrador quedó vacío. Envíame tu solicitud cuando quieras.")
-            return
+    if draft.status == STATE_AWAITING_EMAIL:
+        await _handle_awaiting_email(update, context, draft, user_text)
+        return
 
-        new_irrespetuosa = check_offensive_language(user_text)
-        updated.irrespetuosa = new_irrespetuosa
-        memory_store._drafts[chat_id] = updated
+    if draft.status == STATE_AWAITING_CASE:
+        await _handle_awaiting_case_text(update, context, draft, user_text)
+        return
 
-        msg = build_confirmation_message(updated.get_full_text(), is_update=True)
-        if new_irrespetuosa:
-            msg += "\n\n⚠️ Tu solicitud contiene lenguaje que podría considerarse ofensivo. Te pedimos amablemente reformular."
-        await update.message.reply_text(msg, reply_markup=build_confirmation_keyboard())
+    if draft.status == STATE_AWAITING_OCR_VALIDATION:
+        await update.message.reply_text(
+            "Estoy esperando tu confirmación sobre el texto de la imagen. "
+            "Por favor usa los botones 👆"
+        )
+        return
+
+    if draft.status == STATE_READY_TO_SEND:
+        await update.message.reply_text(
+            "Tu caso está listo para enviar. Usa los botones 👆",
+            reply_markup=build_send_keyboard(),
+        )
+        return
+
+    await update.message.reply_text(
+        "Para iniciar una nueva solicitud, envía /start."
+    )
+
+
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message is None or not update.message.photo:
+        return
+    chat_id = update.effective_chat.id
+    draft = memory_store.get(chat_id)
+
+    if draft is None or draft.status != STATE_AWAITING_CASE:
+        await update.message.reply_text(
+            "Envía una foto solo cuando te la pida el sistema. "
+            "Si quieres iniciar una nueva solicitud, envía /start."
+        )
         return
 
     await context.bot.send_chat_action(chat_id=chat_id, action="typing")
-    classification = await classify_message(user_text, llm)
 
-    tipo = classification.get("tipo", "otro")
-
-    if tipo == "otro":
-        await update.message.reply_text(FRIENDLY_REJECTION)
-        return
-
-    if tipo == "saludo":
-        try:
-            response = await chain.ainvoke({"user_message": user_text})
-            await update.message.reply_text(response)
-        except Exception as exc:
-            logger.exception("Error al responder saludo: %s", exc)
-            await update.message.reply_text("¡Hola! Soy Alexa 👋 ¿En qué puedo ayudarte?")
-        return
-
-    if tipo == "pqrs":
-        if len(user_text) < 12:
-            await update.message.reply_text(
-                "Tu mensaje parece ser muy corto para procesar una solicitud. "
-                "¿Podrías contarme con más detalles lo que necesitas?"
-            )
-            return
-
-        if detect_negative_sentiment(user_text):
-            empathy = build_empathy_message(user_text)
-            await update.message.reply_text(empathy)
-            await asyncio.sleep(1)
-
-        is_offensive = check_offensive_language(user_text)
-
-        pqrs_type = detect_pqrs_type(user_text)
-        questions = get_questions_for_type(pqrs_type)
-
-        draft = memory_store.set(
-            chat_id,
-            user_text,
-            status="collecting_details",
-            irrespetuosa=is_offensive,
-            pending_questions=questions,
-            pqrs_type=pqrs_type,
-        )
-
-        type_label = PQRS_TYPE_LABELS.get(pqrs_type, "Solicitud")
-        first_q = questions[0]
+    try:
+        photo = update.message.photo[-1]
+        tg_file = await photo.get_file()
+        image_bytes = bytes(await tg_file.download_as_bytearray())
+    except Exception as exc:
+        logger.exception("Error descargando imagen: %s", exc)
         await update.message.reply_text(
-            f"He recibido tu {type_label.lower()} 📝\n\n"
-            f"Para registrarla bien, ayúdame con algunos datos:\n\n"
-            f"👉 *{first_q}*",
-            parse_mode="Markdown",
-            reply_markup=build_done_keyboard(),
+            "😕 No pude descargar la imagen. Intenta enviarla de nuevo."
         )
-
-        try:
-            job = context.job_queue.run_once(
-                cleanup_draft,
-                when=DRAFT_TIMEOUT_SECONDS,
-                data=chat_id,
-                chat_id=chat_id,
-                name=f"draft_timeout_{chat_id}",
-            )
-            draft.timeout_task = job
-            memory_store._drafts[chat_id] = draft
-        except Exception as exc:
-            logger.warning("No se pudo programar timeout para borrador %s: %s", chat_id, exc)
         return
 
     try:
-        response = await chain.ainvoke({"user_message": user_text})
-        await update.message.reply_text(response)
+        ocr_text = await extract_text_from_image(image_bytes)
+    except httpx.TimeoutException:
+        logger.warning("OCR timeout para chat %s", chat_id)
+        await update.message.reply_text(
+            "😕 El procesamiento de la imagen tardó demasiado. "
+            "Intenta escribir tu caso o enviar otra foto más nítida."
+        )
+        return
     except Exception as exc:
-        logger.exception("Error al invocar el modelo: %s", exc)
-        await update.message.reply_text("Hubo un problema. Intenta de nuevo.")
+        logger.exception("Error en OCR: %s", exc)
+        await update.message.reply_text(
+            "😕 No pude procesar la imagen. "
+            "Intenta escribir tu caso o enviar otra foto más nítida."
+        )
+        return
+
+    if not ocr_text:
+        await update.message.reply_text(
+            "😕 La imagen no contiene texto legible. "
+            "Intenta escribir tu caso o enviar otra foto más nítida."
+        )
+        return
+
+    if not is_valid_case(ocr_text):
+        draft.status = STATE_AWAITING_CASE
+        memory_store._drafts[chat_id] = draft
+        await update.message.reply_text(
+            "🤔 La imagen no parece contener un caso válido (solicitud, queja o reclamo). "
+            "Intenta con una foto más clara de tu carta o documento, o escribe tu caso directamente.",
+            reply_markup=build_invalid_case_keyboard(),
+        )
+        return
+
+    # Capa 2: validación semántica con LLM
+    valido, razon = await validate_case_with_llm(ocr_text)
+    if not valido:
+        draft.status = STATE_AWAITING_CASE
+        memory_store._drafts[chat_id] = draft
+        await update.message.reply_text(
+            f"❌ La imagen no parece contener un caso válido.\n\n"
+            f"📝 Razón: {razon}\n\n"
+            f"Intenta con una foto más clara o escribe tu caso directamente.",
+            reply_markup=build_invalid_case_keyboard(),
+        )
+        return
+
+    draft.ocr_text = ocr_text
+    draft.status = STATE_AWAITING_OCR_VALIDATION
+    memory_store._drafts[chat_id] = draft
+
+    await update.message.reply_text(
+        f"📷 He leído esto de la imagen:\n\n\"{escape_text(ocr_text)}\"\n\n"
+        f"¿Es correcto?",
+        reply_markup=build_ocr_validation_keyboard(),
+    )
+
+
+async def handle_unsupported_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "⚠️ No puedo procesar ese tipo de archivo. "
+        "Por favor, envíame tu caso como texto o una foto."
+    )
 
 
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -681,115 +829,129 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
     chat_id = query.message.chat_id
     draft = memory_store.get(chat_id)
-
     data = query.data
 
-    if data == "new_pqrs":
-        memory_store.clear(chat_id)
+    if data == "id_identificado":
+        memory_store.set(chat_id, status=STATE_AWAITING_DOCUMENTO, tipo_usuario="Identificado")
+        draft = memory_store.get(chat_id)
+        _schedule_timeout(context, chat_id, draft)
+        await _show_identification_step(query, draft, STATE_AWAITING_DOCUMENTO)
+        return
+
+    if data == "id_anonimo":
+        memory_store.set(chat_id, status=STATE_AWAITING_CASE, tipo_usuario="Anonimo")
+        draft = memory_store.get(chat_id)
+        _schedule_timeout(context, chat_id, draft)
         await query.edit_message_text(
-            "Perfecto. Envíame tu nueva solicitud cuando quieras 😊"
+            "🔒 Tu solicitud será procesada de forma anónima. Al no registrar correo, "
+            "deberás consultar el estado guardando el número de radicado que te "
+            "daremos al final."
+        )
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=(
+                "Por favor, cuéntanos en detalle tu caso. Puedes escribir el texto directamente aquí "
+                "o, si tienes una carta o documento impreso, tómale una foto nítida y envíala. "
+                "Nuestro sistema procesará la información automáticamente.\n\n"
+                "⚠️ *Nota:* No se reciben archivos en formato PDF o Word, únicamente texto o fotos."
+            ),
+            parse_mode="Markdown",
         )
         return
 
-    if data == "continue_pqrs":
-        if draft is not None and draft.status in ("collecting_details", "pending_confirmation"):
-            draft.status = "pending_confirmation"
-            memory_store._drafts[chat_id] = draft
-            msg = build_confirmation_message(draft.get_full_text())
-            if draft.irrespetuosa:
-                msg += "\n\n⚠️ Tu solicitud contiene lenguaje que podría considerarse ofensivo. Te pedimos amablemente reformular."
-            await query.edit_message_text(msg, reply_markup=build_confirmation_keyboard())
-        else:
-            await query.edit_message_text("Tu solicitud ya no está activa. Envíame una nueva cuando quieras.")
+    if data == "restart_identification":
+        memory_store.set(chat_id, status=STATE_AWAITING_ID_TYPE)
+        draft = memory_store.get(chat_id)
+        _schedule_timeout(context, chat_id, draft)
+        await query.edit_message_text(
+            "Perfecto, empezamos de nuevo 🔄\n\n"
+            "¿Cómo prefieres identificarte?",
+            reply_markup=build_identification_keyboard(),
+        )
         return
 
-    if data == "finish_details":
-        if draft is not None and draft.status == "collecting_details":
-            draft.status = "pending_confirmation"
-            memory_store._drafts[chat_id] = draft
-            msg = build_confirmation_message(draft.get_full_text())
-            if draft.irrespetuosa:
-                msg += "\n\n⚠️ Tu solicitud contiene lenguaje que podría considerarse ofensivo. Te pedimos amablemente reformular."
-            await query.edit_message_text(msg, reply_markup=build_confirmation_keyboard())
-        else:
-            await query.edit_message_text("Tu solicitud ya no está activa. Envíame una nueva cuando quieras.")
-        return
-
-    if data == "add_more":
-        if draft is not None and draft.status == "collecting_details":
-            unanswered = [q for q in get_questions_for_type(draft.pqrs_type) if q not in draft.collected_details]
-            if not unanswered:
-                await query.edit_message_text(
-                    "Ya has respondido todas las preguntas 😊\n"
-                    "¿Quieres confirmar el envío de tu solicitud?",
-                    reply_markup=build_done_keyboard(),
-                )
-                return
-            next_q = unanswered[0]
-            draft.pending_questions = unanswered
-            memory_store._drafts[chat_id] = draft
-            await query.edit_message_text(
-                f"Perfecto, agreguemos más detalles 😊\n\n"
-                f"👉 *{next_q}*",
+    if data == "ocr_yes":
+        if draft is None or draft.status != STATE_AWAITING_OCR_VALIDATION:
+            await query.edit_message_text("Tu sesión expiró. Envía /start para iniciar de nuevo.")
+            return
+        draft.descripcion_caso = draft.ocr_text
+        draft.pqrs_type = detect_pqrs_type(draft.ocr_text)
+        draft.irrespetuosa = check_offensive_language(draft.ocr_text)
+        draft.status = STATE_READY_TO_SEND
+        memory_store._drafts[chat_id] = draft
+        if detect_negative_sentiment(draft.descripcion_caso):
+            empathy = build_empathy_message(draft.descripcion_caso)
+            await query.edit_message_text(empathy)
+            await asyncio.sleep(1)
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=build_case_preview(draft.descripcion_caso),
                 parse_mode="Markdown",
-                reply_markup=build_done_keyboard(),
+                reply_markup=build_send_keyboard(),
             )
         else:
-            await query.edit_message_text("Tu solicitud ya no está activa. Envíame una nueva cuando quieras.")
-        return
-
-    if data == "retry_answer":
-        if draft is not None and draft.status == "collecting_details" and draft.pending_questions:
-            current_question = draft.pending_questions[0]
-            type_label = PQRS_TYPE_LABELS.get(draft.pqrs_type, "Solicitud")
             await query.edit_message_text(
-                f"👍 Vamos de nuevo con la {type_label.lower()}.\n\n"
-                f"👉 *{current_question}*",
+                build_case_preview(draft.descripcion_caso),
                 parse_mode="Markdown",
-                reply_markup=build_validation_keyboard(),
+                reply_markup=build_send_keyboard(),
             )
-        else:
-            await query.edit_message_text("Tu solicitud ya no está activa. Envíame una nueva cuando quieras.")
         return
 
-    if data == "skip_question":
-        if draft is not None and draft.status == "collecting_details" and draft.pending_questions:
-            current_question = draft.pending_questions[0]
-            draft.collected_details[current_question] = "(no respondido)"
-            draft.pending_questions = draft.pending_questions[1:]
-            memory_store._drafts[chat_id] = draft
-            if draft.pending_questions:
-                next_q = draft.pending_questions[0]
-                await query.edit_message_text(
-                    f"Ok, saltamos esa pregunta 👍\n\n"
-                    f"👉 *{next_q}*",
-                    parse_mode="Markdown",
-                    reply_markup=build_done_keyboard(),
-                )
-            else:
-                await query.edit_message_text(
-                    "Hemos terminado con las preguntas 🎉\n"
-                    "Revisemos tu solicitud antes de enviarla.",
-                    reply_markup=build_done_keyboard(),
-                )
-        else:
-            await query.edit_message_text("Tu solicitud ya no está activa. Envíame una nueva cuando quieras.")
+    if data == "ocr_no":
+        if draft is None:
+            await query.edit_message_text("Tu sesión expiró. Envía /start para iniciar de nuevo.")
+            return
+        draft.status = STATE_AWAITING_CASE
+        draft.ocr_text = ""
+        memory_store._drafts[chat_id] = draft
+        await query.edit_message_text(
+            "Entendido, vuelve a escribir tu caso o envía otra foto 📷"
+        )
         return
 
-    if draft is None or draft.status != "pending_confirmation":
-        await query.edit_message_text("Tu solicitud ya no está activa. Envíame una nueva cuando quieras.")
+    if data == "edit_case":
+        if draft is None:
+            await query.edit_message_text("Tu sesión expiró. Envía /start para iniciar de nuevo.")
+            return
+        draft.status = STATE_AWAITING_CASE
+        draft.descripcion_caso = ""
+        draft.ocr_text = ""
+        memory_store._drafts[chat_id] = draft
+        await query.edit_message_text(
+            "Perfecto, vamos a corregir tu caso 🔄\n\n"
+            "Envíamelo de nuevo como texto o como foto."
+        )
         return
 
-    if data == "confirm":
-        pqrs_json = build_pqrs_json(update, draft.get_full_text())
+    if data == "retry_case":
+        if draft is None:
+            await query.edit_message_text("Tu sesión expiró. Envía /start para iniciar de nuevo.")
+            return
+        draft.status = STATE_AWAITING_CASE
+        draft.descripcion_caso = ""
+        draft.ocr_text = ""
+        memory_store._drafts[chat_id] = draft
+        await query.edit_message_text(
+            "Entendido 📝\n\n"
+            "Escríbeme tu caso con detalle. Cuéntame qué necesitas o qué problema tuviste. "
+            "También puedes enviar una foto de un documento o carta."
+        )
+        return
+
+    if data == "send_request":
+        if draft is None or draft.status != STATE_READY_TO_SEND:
+            await query.edit_message_text("Tu sesión expiró. Envía /start para iniciar de nuevo.")
+            return
+
+        pqrs_json = build_pqrs_json(update, draft)
         radicado = pqrs_json["radicado"]
-
         memory_store.clear(chat_id)
 
         try:
             await persist_pqrs(pqrs_json)
             await query.edit_message_text(
-                f"✅ Tu solicitud quedó registrada.\n\n*Radicado:* #{radicado}",
+                f"✅ Tu solicitud quedó registrada.\n\n*Radicado:* #{radicado}\n\n"
+                f"📌 Guárdalo para consultar el estado de tu solicitud.",
                 parse_mode="Markdown",
             )
         except Exception as exc:
@@ -800,23 +962,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             )
         return
 
-    if data == "edit":
-        if draft is not None:
-            questions = get_questions_for_type(draft.pqrs_type)
-            draft.collected_details = {}
-            draft.pending_questions = list(questions)
-            draft.status = "collecting_details"
-            memory_store._drafts[chat_id] = draft
-        await query.edit_message_text(
-            "Perfecto, vamos a empezar de cero 🔄\n\n"
-            "Tu solicitud y detalles anteriores fueron eliminados.\n\n"
-            f"👉 *{questions[0]}*",
-            parse_mode="Markdown",
-            reply_markup=build_done_keyboard(),
-        )
-        return
-
-    await query.edit_message_text("Opción no reconocida. Envíame una nueva solicitud cuando quieras.")
+    await query.edit_message_text("Opción no reconocida. Envía /start para iniciar.")
 
 
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE):
@@ -834,13 +980,15 @@ def main():
     if not ollama_api_key:
         raise ValueError("Falta OLLAMA_API_KEY en variables de entorno.")
 
-    llm = build_llm()
     app = Application.builder().token(telegram_token).build()
-    app.bot_data["llm"] = llm
-    app.bot_data["chain"] = build_chain(llm)
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(handle_callback_query))
+    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    app.add_handler(MessageHandler(
+        (filters.Document.ALL | filters.AUDIO | filters.VIDEO) & ~filters.COMMAND,
+        handle_unsupported_file,
+    ))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_error_handler(on_error)
 

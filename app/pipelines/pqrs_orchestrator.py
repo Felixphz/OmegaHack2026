@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
 import os
 from datetime import datetime, timezone
@@ -140,6 +141,24 @@ def _coerce_fecha_utc(value: Any) -> datetime:
         return datetime.now(timezone.utc)
 
 
+def _extract_pqrs_text(raw_value: Any) -> str:
+    text = str(raw_value or "").strip()
+    if not text:
+        return ""
+    if not text.startswith("{"):
+        return text
+    try:
+        payload = json.loads(text)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return text
+    if isinstance(payload, dict):
+        for key in ("descripcion_caso", "pqrs", "texto", "text"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return text
+
+
 async def _process_single_pqrs(
     source_row: asyncpg.Record,
     routing_chain: Any,
@@ -149,7 +168,7 @@ async def _process_single_pqrs(
     routing_top_k: int,
     classification_top_k: int,
 ) -> dict[str, Any]:
-    pqrs_text = str(source_row["pqrs"] or "").strip()
+    pqrs_text = _extract_pqrs_text(source_row["pqrs"])
     if not pqrs_text:
         raise ValueError(f"PQRS vacia para radicado {source_row['radicado']}.")
 
